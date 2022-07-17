@@ -4,6 +4,7 @@ import asyncio
 import configparser
 import gps.aiogps
 import logging
+import os
 import pendulum
 import shortuuid
 import smbus
@@ -72,12 +73,14 @@ async def ledscreen(event):
     device = ssd1306(serial)
     while True:
         event.clear()
+        load1, load5, load15 = os.getloadavg()
         with canvas(device) as draw:
             draw.rectangle(device.bounding_box, outline="white", fill="black")
             draw.text((5, 4), f"BAT: {UPS:.2f}    FIX: {FIX}", fill="white")
             draw.text((5, 14), f"LAT: {LAT:.9f}", fill="white")
             draw.text((5, 24), f"LON: {LON:.9f}", fill="white")
             draw.text((5, 34), f"{TIM[2:]}", fill="white")
+            draw.text((5, 44), f"{load1} {load5} {load15}", fill="white")
         await asyncio.sleep(0.1)
         await event.wait()
 
