@@ -5,6 +5,7 @@ import configparser
 import gps.aiogps
 import logging
 import pendulum
+import shortuuid
 import smbus
 import struct
 from datetime import datetime
@@ -19,6 +20,7 @@ from s2sphere import CellId, LatLng
 logging.basicConfig()
 logging.root.setLevel(logging.DEBUG)
 logging.getLogger('gps.aiogps').setLevel(logging.ERROR)
+logging.getLogger('PIL.PngImagePlugin').setLevel(logging.ERROR)
 
 # settings
 config = configparser.ConfigParser()
@@ -33,11 +35,7 @@ UPS = 0
 LAT = 0
 LON = 0
 FIX = 0
-SPD = 0
-ALT = 0
 TIM = ""
-TRK = 0
-SEP = 0
 
 # functions
 
@@ -49,15 +47,24 @@ def ll2id(lat, lng):
 
 # async functions
 
-async def idb(lat, lon):
-    async with InfluxDBClientAsync(url=config['main']['influx_url'],
-                                   token=config['main']['influx_token'],
-                                   org=config['main']['influx_org']) as client:
+async def idb(FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID):
+    async with InfluxDBClientAsync(url=config['influx']['url'],
+                                   token=config['influx']['token'],
+                                   org=config['influx']['org']) as client:
         write_api = client.write_api()
-        _lli = ll2id(lat, lon)
-        _point = Point(config['main']['device_name']).tag(
-                 s2_cell_id=_lli).field()
-        successfully = await write_api.write(bucket=config['main']['bucket'], record=[_point])
+        _lli = ll2id(LAT, LON)
+        _point = Point('moto').tag(
+                 "id", config['main']['device_name']).tag(
+                 "s2_cell_id", _lli).field(
+                 "fix", FIX).field(
+                 "lat", LAT).field(
+                 "lon", LON).field(
+                 "speed", SPD).field(
+                 "alt", ALT).field(
+                 "track", TRK).field(
+                 "sep", SEP).field(
+                 "tid", TID)
+        successfully = await write_api.write(bucket=config['influx']['bucket'], record=[_point])
         return f" > successfully: {successfully}"
 
 async def ledscreen(event):
@@ -70,6 +77,7 @@ async def ledscreen(event):
             draw.text((5, 4), f"BAT: {UPS:.2f}    FIX: {FIX}", fill="white")
             draw.text((5, 14), f"LAT: {LAT:.9f}", fill="white")
             draw.text((5, 24), f"LON: {LON:.9f}", fill="white")
+            draw.text((5, 34), f"{TIM}", fill="white")
         await asyncio.sleep(0.1)
         await event.wait()
 
@@ -110,7 +118,10 @@ async def piups(event):
         await asyncio.sleep(10)
 
 async def main():
-    global LAT, LON, FIX
+    global LAT, LON, FIX, TIM
+
+    # Track ID
+    TID = shortuuid.uuid()
 
     # create event to notify led screen to update
     event = asyncio.Event()
@@ -137,7 +148,7 @@ async def main():
             ) as gpsd:
             async for msg in gpsd:
                 # https://gpsd.io/gpsd_json.html
-                logging.debug(msg)
+                #logging.debug(msg)
                 try:
                     # TPV mode: 0=unknown, 1=no fix, 2=2D, 3=3D
                     if msg["class"] == "TPV":
@@ -149,6 +160,11 @@ async def main():
                         TIM = msg.get("time", "")
                         TRK = msg.get("track", "0")
                         SEP = msg.get("sep", 0)  # Estimated Spherical (3D) Position Error in meters
+
+                        # send to Database
+                        idb_task = asyncio.create_task(idb(FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID))
+
+                        # display on LED screen
                         event.set()
                 except:
                     pass
@@ -164,4 +180,5 @@ async def main():
         await asyncio.sleep(0)
 
 #
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

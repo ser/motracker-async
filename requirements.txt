@@ -1,2 +1,3 @@
 s2sphere
 influxdb-client[async]
+shortuuid
