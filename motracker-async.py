@@ -77,7 +77,7 @@ async def ledscreen(event):
             draw.text((5, 4), f"BAT: {UPS:.2f}    FIX: {FIX}", fill="white")
             draw.text((5, 14), f"LAT: {LAT:.9f}", fill="white")
             draw.text((5, 24), f"LON: {LON:.9f}", fill="white")
-            draw.text((5, 34), f"{TIM}", fill="white")
+            draw.text((5, 34), f"{TIM[2:]}", fill="white")
         await asyncio.sleep(0.1)
         await event.wait()
 
