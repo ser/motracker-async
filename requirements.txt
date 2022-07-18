@@ -1,3 +1,5 @@
 s2sphere
 influxdb-client[async]
 shortuuid
+databases[aiosqlite]
+sqlalchemy

@@ -10,18 +10,26 @@ import shortuuid
 import smbus
 import struct
 from datetime import datetime
-from influxdb_client import Point
+from influxdb_client import Point as Ipoint
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
 from luma.oled.device import ssd1306
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from s2sphere import CellId, LatLng
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import relationship
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 
 # configuring logging
 logging.basicConfig()
 logging.root.setLevel(logging.DEBUG)
 logging.getLogger('gps.aiogps').setLevel(logging.ERROR)
 logging.getLogger('PIL.PngImagePlugin').setLevel(logging.ERROR)
+logging.getLogger('aiosqlite').setLevel(logging.ERROR)
 
 # settings
 config = configparser.ConfigParser()
@@ -38,6 +46,33 @@ LON = 0
 FIX = 0
 TIM = ""
 
+# sql database model
+
+Base = declarative_base()
+
+class Track(Base):
+    __tablename__ = 'track'
+    id = Column(String, primary_key=True)
+    points = relationship("Point")
+
+    # required in order to access columns with server defaults
+    # or SQL expression defaults, subsequent to a flush, without
+    # triggering an expired load
+    __mapper_args__ = {"eager_defaults": True}
+
+class Point(Base):
+    __tablename__ = 'point'
+    id = Column(Integer, primary_key=True)
+    trkid = Column(String, ForeignKey("track.id"))
+    fix = Column(Integer)
+    lat = Column(Float)
+    lon = Column(Float)
+    speed = Column(Float)
+    alt = Column(Float)
+    track = Column(Float)
+    sep = Column(Float)
+    time = Column(DateTime)
+
 # functions
 
 def ll2id(lat, lng):
@@ -48,25 +83,39 @@ def ll2id(lat, lng):
 
 # async functions
 
-async def idb(FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID):
-    async with InfluxDBClientAsync(url=config['influx']['url'],
-                                   token=config['influx']['token'],
-                                   org=config['influx']['org']) as client:
-        write_api = client.write_api()
-        _lli = ll2id(LAT, LON)
-        _point = Point('moto').tag(
-                 "id", config['main']['device_name']).tag(
-                 "s2_cell_id", _lli).field(
-                 "fix", FIX).field(
-                 "lat", LAT).field(
-                 "lon", LON).field(
-                 "speed", SPD).field(
-                 "alt", ALT).field(
-                 "track", TRK).field(
-                 "sep", SEP).field(
-                 "tid", TID)
-        successfully = await write_api.write(bucket=config['influx']['bucket'], record=[_point])
-        return f" > successfully: {successfully}"
+async def s2sql(async_session, FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID):
+    try:
+        tim = pendulum.parse(TIM)
+        async with async_session() as session:
+            async with session.begin():
+                session.add(
+                    Point(trkid=TID, lat=LAT, lon=LON, speed=SPD, alt=ALT, track=TRK, sep=SEP, time=tim)
+                )
+            await session.commit()
+    except Exception as exc:
+        logging.error(f'Error: {exc}')
+
+async def s2inf(FIX, LAT, LON, SPD, ALT, TRK, SEP, TID):
+    try:
+        async with InfluxDBClientAsync(url=config['influx']['url'],
+                                       token=config['influx']['token'],
+                                        org=config['influx']['org']) as client:
+            write_api = client.write_api()
+            _lli = ll2id(LAT, LON)
+            _point = Ipoint('moto').tag(
+                'id', config['main']['device_name']).tag(
+                    's2_cell_id', _lli).field(
+                        'fix', FIX).field(
+                            'lat', LAT).field(
+                                'lon', LON).field(
+                                    'speed', SPD).field(
+                                        'alt', ALT).field(
+                                            'track', TRK).field(
+                                                'sep', SEP).field(
+                                                    'tid', TID)
+            await write_api.write(bucket=config['influx']['bucket'], record=[_point])
+    except Exception as exc:
+        logging.error(f'Error: {exc}')
 
 async def ledscreen(event):
     serial = i2c(port=1, address=0x3c)
@@ -123,9 +172,26 @@ async def piups(event):
 async def main():
     global LAT, LON, FIX, TIM
 
+    # DB
+    #engine = create_async_engine(config['sql']['db'], echo=True)
+    engine = create_async_engine(config['sql']['db'], poolclass=NullPool)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    # expire_on_commit=False will prevent attributes from being expired after commit
+    async_session = sessionmaker(
+        engine, expire_on_commit=False, class_=AsyncSession
+    )
+
     # Track ID
     TID = shortuuid.uuid()
 
+    # DB track init
+    async with async_session() as session:
+        async with session.begin():
+            session.add(
+                Track(id=TID)
+            )
+        await session.commit()
     # create event to notify led screen to update
     event = asyncio.Event()
 
@@ -164,8 +230,13 @@ async def main():
                         TRK = msg.get("track", "0")
                         SEP = msg.get("sep", 0)  # Estimated Spherical (3D) Position Error in meters
 
-                        # send to Database
-                        idb_task = asyncio.create_task(idb(FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID))
+                        # send to influx
+                        s2inf_task = asyncio.create_task(s2inf(
+                            FIX, LAT, LON, SPD, ALT, TRK, SEP, TID))
+
+                        # send to sql
+                        s2sql_task = asyncio.create_task(s2sql(
+                            async_session, FIX, LAT, LON, SPD, ALT, TIM, TRK, SEP, TID))
 
                         # display on LED screen
                         event.set()
