@@ -1,0 +1,16 @@
+[Unit]
+Description=MoTracker PowerOFF
+DefaultDependencies=no
+Conflicts=reboot.target
+Before=poweroff.target halt.target shutdown.target
+Requires=poweroff.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/pi/motracker-async
+ExecStart=/home/pi/motracker-async/motracker-poweroff.py
+User=pi
+RemainAfterExit=yes
+
+[Install]
+WantedBy=shutdown.target

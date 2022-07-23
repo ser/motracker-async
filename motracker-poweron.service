@@ -1,0 +1,15 @@
+[Unit]
+Description=MoTracker PowerON
+Before=multi-user.target
+After=basic.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/motracker-async
+ExecStart=/home/pi/motracker-async/motracker-poweron.py
+Restart=always
+RestartSec=0
+User=pi
+
+[Install]
+WantedBy=multi-user.target

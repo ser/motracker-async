@@ -1,0 +1,15 @@
+[Unit]
+Description=MoTracker
+After=network.target
+After=gpsd.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/pi/motracker-async
+ExecStart=/home/pi/motracker-async/motracker-async.py
+Restart=always
+RestartSec=10
+User=pi
+
+[Install]
+WantedBy=multi-user.target
