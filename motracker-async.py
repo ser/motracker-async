@@ -6,9 +6,11 @@ import gps.aiogps
 import logging
 import os
 import pendulum
+import random
 import shortuuid
 import smbus
 import struct
+import subprocess
 from datetime import datetime
 from influxdb_client import Point as Ipoint
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
@@ -76,10 +78,19 @@ class Point(Base):
 # functions
 
 def ll2id(lat, lng):
+    ''' Convert LAT/LON to CellId '''
     l2i = CellId.from_lat_lng(
            LatLng.from_degrees(
             lat, lng)).parent(cell_level).to_token()
     return l2i
+
+def shutpidown():
+    ''' Power off the Raspberry Pi '''
+    logging.info(f'SHUTDOWN BATTERY LOW')
+    try:
+        subprocess.run(["/usr/bin/sudo", "/usr/bin/systemctl", "poweroff"], capture_output=True)
+    except Exception as exc:
+        logging.error(f'Shutdown error: {exc}')
 
 # async functions
 
@@ -106,12 +117,12 @@ async def s2inf(FIX, LAT, LON, SPD, ALT, TRK, SEP, TID):
                 'id', config['main']['device_name']).tag(
                     's2_cell_id', _lli).field(
                         'fix', FIX).field(
-                            'lat', LAT).field(
-                                'lon', LON).field(
-                                    'speed', SPD).field(
-                                        'alt', ALT).field(
-                                            'track', TRK).field(
-                                                'sep', SEP).field(
+                            'lat', float(LAT)).field(
+                                'lon', float(LON)).field(
+                                    'speed', float(SPD)).field(
+                                        'alt', float(ALT)).field(
+                                            'track', float(TRK)).field(
+                                                'sep', float(SEP)).field(
                                                     'tid', TID)
             await write_api.write(bucket=config['influx']['bucket'], record=[_point])
     except Exception as exc:
@@ -121,17 +132,22 @@ async def ledscreen(event):
     serial = i2c(port=1, address=0x3c)
     device = ssd1306(serial)
     while True:
-        event.clear()
-        load1, load5, load15 = os.getloadavg()
-        with canvas(device) as draw:
-            draw.rectangle(device.bounding_box, outline="white", fill="black")
-            draw.text((5, 4), f"BAT: {UPS:.2f}    FIX: {FIX}", fill="white")
-            draw.text((5, 14), f"LAT: {LAT:.9f}", fill="white")
-            draw.text((5, 24), f"LON: {LON:.9f}", fill="white")
-            draw.text((5, 34), f"{TIM[2:]}", fill="white")
-            draw.text((5, 44), f"{load1} {load5} {load15}", fill="white")
-        await asyncio.sleep(0.1)
-        await event.wait()
+        x = random.randint(0, 5)
+        y = random.randint(0, 5)
+        z = 0
+        while z < 30:
+            event.clear()
+            load1, load5, load15 = os.getloadavg()
+            with canvas(device) as draw:
+                #draw.rectangle(device.bounding_box, outline="white", fill="black")
+                draw.text((x+2, y+2), f"BAT: {UPS:.2f}    FIX: {FIX}", fill="white")
+                draw.text((x+2, y+12), f"LAT: {LAT:.9f}", fill="white")
+                draw.text((x+2, y+22), f"LON: {LON:.9f}", fill="white")
+                draw.text((x+2, y+32), f"{TIM[2:]}", fill="white")
+                draw.text((x+2, y+42), f"{load1} {load5} {load15}", fill="white")
+            await asyncio.sleep(0.1)
+            await event.wait()
+            z = z+1
 
 async def piups(event):
     global UPS
@@ -166,6 +182,10 @@ async def piups(event):
             await asyncio.sleep(10)
             QuickStart(bus)
             logging.error(f'Error: {exc}')
+
+        # If battery on UPS is critically low, shut system down
+        if UPS < 15:
+            shutpidown()
 
         await asyncio.sleep(10)
 
